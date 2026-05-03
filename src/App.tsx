@@ -9,13 +9,14 @@ import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth } from "./lib/firebase";
 import Dashboard from "./pages/Dashboard";
 import Activity from "./pages/Transactions";
-import Budgets from "./pages/Budgets";
-import Goals from "./pages/Goals";
 import Reports from "./pages/Reports";
 import Settings from "./pages/Settings";
 import AuthPage from "./pages/Auth";
 import Recurring from "./pages/Recurring";
 import SharedDashboard from "./pages/SharedDashboard";
+import About from "./pages/About";
+import AIAdvisor from "./pages/AIAdvisor";
+import Planning from "./pages/Planning";
 import Layout from "./components/Layout";
 
 export default function App() {
@@ -51,12 +52,13 @@ export default function App() {
         <Route element={isAuthenticated ? <Layout onLogout={handleLogout} /> : <Navigate to="/auth" />}>
           <Route path="/" element={<Dashboard />} />
           <Route path="/activity" element={<Activity />} />
-          <Route path="/budgets" element={<Budgets />} />
-          <Route path="/goals" element={<Goals />} />
+          <Route path="/planning" element={<Planning />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/recurring" element={<Recurring />} />
           <Route path="/shared" element={<SharedDashboard />} />
+          <Route path="/about" element={<About />} />
+          <Route path="/ai-advisor" element={<AIAdvisor />} />
         </Route>
       </Routes>
     </Router>

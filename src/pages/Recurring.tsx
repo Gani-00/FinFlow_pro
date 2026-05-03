@@ -2,6 +2,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Plus, Repeat, Calendar, Trash2, X, AlertCircle } from "lucide-react";
 import { useState, useEffect } from "react";
 import { db, auth, handleFirestoreError, OperationType } from "../lib/firebase";
+import { useCurrency, formatCurrency } from "../services/currencyService";
 import { 
   collection, 
   query, 
@@ -24,6 +25,7 @@ type RecurringBill = {
 };
 
 export default function Recurring() {
+  const { currency } = useCurrency();
   const [bills, setBills] = useState<RecurringBill[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -123,7 +125,7 @@ export default function Recurring() {
          <div className="flex justify-between items-start mb-8">
             <div>
                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Total Fixed Monthly</p>
-               <h3 className="text-4xl font-black tracking-tighter text-gray-900">₹{totalMonthly.toLocaleString()}</h3>
+               <h3 className="text-4xl font-black tracking-tighter text-gray-900">{formatCurrency(totalMonthly, currency)}</h3>
             </div>
             <button 
               onClick={() => setIsModalOpen(true)}
@@ -164,7 +166,7 @@ export default function Recurring() {
 
             <div className="flex items-center gap-6">
               <div className="text-right">
-                <p className="text-lg font-black tracking-tighter text-gray-900 leading-none">₹{bill.amount.toLocaleString()}</p>
+                <p className="text-lg font-black tracking-tighter text-gray-900 leading-none">{formatCurrency(bill.amount, currency)}</p>
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Next: {format(bill.nextDate, "MMM dd")}</p>
               </div>
               <button 

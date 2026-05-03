@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Plus, Search, Trash2, TrendingUp, TrendingDown, X } from "lucide-react";
 import { format } from "date-fns";
 import { db, auth, handleFirestoreError, OperationType } from "../lib/firebase";
+import { useCurrency, formatCurrency } from "../services/currencyService";
 import { 
   collection, 
   addDoc, 
@@ -26,6 +27,7 @@ type Transaction = {
 };
 
 export default function Transactions() {
+  const { currency } = useCurrency();
   const [searchTerm, setSearchTerm] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -170,14 +172,14 @@ export default function Transactions() {
             <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
             <div>
                <p className="text-[8px] font-bold uppercase text-gray-400 tracking-widest leading-none mb-1">Income</p>
-               <p className="text-lg font-bold tracking-tight text-gray-900 leading-none">₹{totalIncome.toLocaleString()}</p>
+               <p className="text-lg font-bold tracking-tight text-gray-900 leading-none">{formatCurrency(totalIncome, currency)}</p>
             </div>
          </div>
          <div className="bg-white rounded-2xl p-4 border border-gray-100 shadow-sm flex items-center gap-3">
             <div className="w-1.5 h-1.5 rounded-full bg-rose-500" />
             <div>
                <p className="text-[8px] font-bold uppercase text-gray-400 tracking-widest leading-none mb-1">Expense</p>
-               <p className="text-lg font-bold tracking-tight text-gray-900 leading-none">₹{totalExpense.toLocaleString()}</p>
+               <p className="text-lg font-bold tracking-tight text-gray-900 leading-none">{formatCurrency(totalExpense, currency)}</p>
             </div>
          </div>
       </div>
@@ -207,7 +209,7 @@ export default function Transactions() {
                     </div>
                     <div className="text-right flex flex-col items-end gap-1">
                        <p className={`text-lg font-bold tracking-tighter ${tx.type === 'income' ? 'text-emerald-500' : 'text-gray-900'}`}>
-                          {tx.type === 'expense' ? '-' : '+'}₹{tx.amount.toLocaleString()}
+                          {tx.type === 'expense' ? '-' : '+'}{formatCurrency(tx.amount, currency)}
                        </p>
                        <button 
                           onClick={(e) => { e.stopPropagation(); setIsDeleting(tx.id); }} 
@@ -260,7 +262,7 @@ export default function Transactions() {
                      
                      <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-1">
-                           <label className="text-[10px] font-bold uppercase tracking-widest text-gray-400 ml-1">Amount</label>
+                           <label className="text-[10px] font-bold uppercase tracking-widest text-gray-400 ml-1">Amount ({currency.symbol})</label>
                            <input 
                               type="number" required 
                               className="w-full bg-gray-50 border-none rounded-2xl p-4 text-sm font-bold focus:ring-4 focus:ring-violet-50 transition-all outline-none"

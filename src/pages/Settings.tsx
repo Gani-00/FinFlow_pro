@@ -1,19 +1,36 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { auth, db, handleFirestoreError, OperationType } from "../lib/firebase";
-import { signOut } from "firebase/auth";
-import { collection, query, where, getDocs, writeBatch, doc, serverTimestamp, orderBy, startAt, endAt } from "firebase/firestore";
+import { signOut, updateProfile } from "firebase/auth";
+import { collection, query, where, getDocs, writeBatch, doc, serverTimestamp, orderBy } from "firebase/firestore";
 import { motion, AnimatePresence } from "motion/react";
-import { User, DollarSign, RefreshCw, Download, Trash2, Plus, Bell, Shield, ChevronRight, Share2 } from "lucide-react";
+import { User, RefreshCw, Download, Plus, Bell, ChevronRight, Edit2, Check, X, Info } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
+import { useCurrency, currencies } from "../services/currencyService";
 
 export default function Settings() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
+  const { currency, updateCurrency } = useCurrency();
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [newName, setNewName] = useState(auth.currentUser?.displayName || "");
 
   const handleLogout = async () => {
     await signOut(auth);
+  };
+
+  const handleUpdateName = async () => {
+    if (!auth.currentUser) return;
+    setLoading(true);
+    try {
+      await updateProfile(auth.currentUser, { displayName: newName });
+      setIsEditingName(false);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const [isResetting, setIsResetting] = useState(false);
@@ -221,25 +238,73 @@ export default function Settings() {
 
       {/* User Card - Page 13 */}
       <div className="relative overflow-hidden bg-gradient-to-br from-[#a78bfa] to-[#f472b6] rounded-[40px] p-8 text-white shadow-xl">
-          <div className="flex flex-col items-center text-center">
-             <div className="w-20 h-20 bg-white/20 rounded-full flex items-center justify-center text-3xl font-bold mb-4">
+          <div className="flex flex-col items-center text-center space-y-4">
+             <div className="w-20 h-20 bg-white/20 rounded-full flex items-center justify-center text-3xl font-bold border-2 border-white/30">
                 {auth.currentUser?.displayName?.[0] || auth.currentUser?.email?.[0] || "Y"}
              </div>
-             <h2 className="text-2xl font-bold mb-1">{auth.currentUser?.displayName || "You"}</h2>
-             <p className="text-sm opacity-80">30 transactions • 5 budgets • 2 recurring</p>
+             
+             <div className="w-full flex flex-col items-center">
+               {isEditingName ? (
+                 <div className="flex items-center gap-2 bg-white/20 p-2 rounded-2xl w-full max-w-xs">
+                   <input 
+                     type="text" 
+                     className="bg-transparent border-none text-white placeholder-white/60 font-bold text-center w-full focus:ring-0 outline-none"
+                     value={newName}
+                     onChange={(e) => setNewName(e.target.value)}
+                     autoFocus
+                   />
+                   <button onClick={handleUpdateName} className="p-2 hover:bg-white/20 rounded-xl transition-colors">
+                     <Check size={18} />
+                   </button>
+                   <button onClick={() => setIsEditingName(false)} className="p-2 hover:bg-white/20 rounded-xl transition-colors">
+                     <X size={18} />
+                   </button>
+                 </div>
+               ) : (
+                 <div className="group flex items-center gap-2 cursor-pointer" onClick={() => setIsEditingName(true)}>
+                   <h2 className="text-2xl font-black">{auth.currentUser?.displayName || "You"}</h2>
+                   <Edit2 size={16} className="opacity-0 group-hover:opacity-60 transition-opacity" />
+                 </div>
+               )}
+               <p className="text-sm opacity-80 mt-1">{auth.currentUser?.email}</p>
+             </div>
           </div>
       </div>
 
       {/* Currency - Page 13 */}
       <section className="space-y-4">
-        <h3 className="text-lg font-bold text-gray-900">Currency</h3>
+        <h3 className="text-lg font-bold text-gray-900 border-l-4 border-violet-600 pl-4">Base Currency</h3>
         <div className="flex flex-wrap gap-2">
            {currencies.map((c) => (
-             <button key={c.code} className={`px-5 py-3 rounded-2xl border transition-all flex items-center gap-2 ${c.code === 'INR' ? 'bg-[#7c3aed] text-white border-[#7c3aed]' : 'bg-white text-gray-600 border-gray-100 hover:border-gray-200'}`}>
-                <span className="text-sm font-bold">{c.symbol} {c.code}</span>
+             <button 
+               key={c.code} 
+               onClick={() => updateCurrency(c.code)}
+               className={`px-5 py-4 rounded-2xl border transition-all flex items-center gap-3 ${currency.code === c.code ? 'bg-[#7c3aed] text-white border-[#7c3aed] shadow-lg shadow-violet-100 scale-105' : 'bg-white text-gray-600 border-gray-100 hover:border-gray-200'}`}
+             >
+                <span className="text-sm font-black">{c.symbol} {c.code}</span>
              </button>
            ))}
         </div>
+      </section>
+
+      {/* About - NEW */}
+      <section className="space-y-4">
+        <h3 className="text-lg font-bold text-gray-900">About</h3>
+        <button 
+           onClick={() => navigate('/about')}
+           className="w-full bg-white rounded-3xl p-6 shadow-sm border border-gray-100 flex items-center justify-between hover:border-violet-200 transition-all group"
+        >
+            <div className="flex items-center gap-4">
+                <div className="w-12 h-12 bg-violet-50 rounded-2xl flex items-center justify-center text-violet-600">
+                    <Info size={24} />
+                </div>
+                <div className="text-left">
+                   <h4 className="font-bold text-gray-900">How to use FinFlow</h4>
+                   <p className="text-xs text-gray-500">Learn about our smart features and security.</p>
+                </div>
+            </div>
+            <ChevronRight size={20} className="text-gray-400 group-hover:translate-x-1 transition-transform" />
+        </button>
       </section>
 
 

@@ -41,6 +41,8 @@ export default function AuthPage({ onAuthSuccess }: AuthPageProps) {
         setError("Sign-in method not enabled. Please enable Google in Firebase Console.");
       } else if (err.code === 'auth/popup-blocked') {
         setError("Login popup was blocked. Please allow popups for this site.");
+      } else if (err.code === 'auth/unauthorized-domain') {
+        setError(`Domain "${window.location.hostname}" is not authorized. Please add it to your Firebase Console under Authentication > Settings > Authorized Domains.`);
       } else {
         setError(err.message);
       }
