@@ -56,7 +56,7 @@ export default function AIAdvisor() {
     setLoading(true);
 
     try {
-      const apiKey = process.env.AIzaSyDYadCQxs_sePaKDd8nOz8hoh_kDZdCdIw;
+      const apiKey = process.env.ENTER_API_KEY;
       if (!apiKey) throw new Error("API Key missing");
       
       const genAI = new GoogleGenAI({ apiKey });
