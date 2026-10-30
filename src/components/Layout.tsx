@@ -1,5 +1,5 @@
 import { Outlet, Link, useLocation } from "react-router-dom";
-import { Home, List, PieChart, BarChart3, Settings, Plus, Target, LogOut, X, Info, Sparkles } from "lucide-react";
+import { Home, List, PieChart, BarChart3, Settings, Plus, Target, LogOut, X, Info, Sparkles, AlertTriangle } from "lucide-react";
 import { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { db, auth, handleFirestoreError, OperationType } from "../lib/firebase";
@@ -14,7 +14,12 @@ export default function Layout({ onLogout }: LayoutProps) {
   const location = useLocation();
   const { currency } = useCurrency();
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [newTx, setNewTx] = useState({ name: "", amount: "", type: "expense" as const, category: "Shopping" });
+  const [newTx, setNewTx] = useState<{ name: string; amount: string; type: "expense" | "income"; category: string }>({ 
+    name: "", 
+    amount: "", 
+    type: "expense", 
+    category: "Shopping" 
+  });
 
   const navItems = [
     { name: "Home", path: "/", icon: Home },
@@ -172,8 +177,8 @@ export default function Layout({ onLogout }: LayoutProps) {
                               className="w-full bg-gray-50 border-2 border-transparent rounded-2xl p-4 text-sm font-bold focus:border-violet-100 focus:bg-white focus:ring-4 focus:ring-violet-50 transition-all outline-none appearance-none"
                               value={newTx.type} onChange={e => setNewTx({...newTx, type: e.target.value as any})}
                            >
-                              <option value="expense">Expense (-)</option>
-                              <option value="income">Income (+)</option>
+                              <option value="expense">Expense / Savings (-)</option>
+                              <option value="income">Income / Earnings (+)</option>
                            </select>
                         </div>
                      </div>
@@ -184,11 +189,20 @@ export default function Layout({ onLogout }: LayoutProps) {
                            className="w-full bg-gray-50 border-2 border-transparent rounded-2xl p-4 text-sm font-bold focus:border-violet-100 focus:bg-white focus:ring-4 focus:ring-violet-50 transition-all outline-none appearance-none"
                            value={newTx.category} onChange={e => setNewTx({...newTx, category: e.target.value})}
                         >
-                           {["Shopping", "Food", "Home", "Travel", "Healthcare", "Education", "Entertainment", "Other"].map(cat => (
+                           {["Shopping", "Food", "Home", "Travel", "Healthcare", "Education", "Entertainment", "Savings & Goals", "Salary & Income", "Other"].map(cat => (
                              <option key={cat} value={cat}>{cat}</option>
                            ))}
                         </select>
                      </div>
+
+                     {newTx.type === "income" && (newTx.category === "Savings & Goals" || newTx.name.toLowerCase().includes("goal") || newTx.name.toLowerCase().includes("saving")) && (
+                       <div className="p-3 bg-amber-50 border border-amber-200/80 rounded-2xl flex items-start gap-2.5 text-left">
+                         <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+                         <p className="text-[11px] text-amber-800 leading-tight">
+                           <strong>Notice:</strong> Goals are savings set aside, not earnings. If this is money for a goal, choose <strong>Expense / Savings (-)</strong> to prevent inflating your Total Income.
+                         </p>
+                       </div>
+                     )}
                   </div>
 
                   <button 

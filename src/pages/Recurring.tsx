@@ -1,8 +1,9 @@
 import { motion, AnimatePresence } from "motion/react";
 import { Plus, Repeat, Calendar, Trash2, X, AlertCircle } from "lucide-react";
 import { useState, useEffect } from "react";
-import { db, auth, handleFirestoreError, OperationType } from "../lib/firebase";
+import { db, auth, handleFirestoreError, OperationType, getReadableFirestoreErrorMessage } from "../lib/firebase";
 import { useCurrency, formatCurrency } from "../services/currencyService";
+import { useToast } from "../context/ToastContext";
 import { 
   collection, 
   query, 
@@ -26,6 +27,7 @@ type RecurringBill = {
 
 export default function Recurring() {
   const { currency } = useCurrency();
+  const { success: toastSuccess, error: toastError } = useToast();
   const [bills, setBills] = useState<RecurringBill[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -36,31 +38,38 @@ export default function Recurring() {
     if (!auth.currentUser) return;
 
     const q = query(collection(db, "recurring"), where("userId", "==", auth.currentUser.uid));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const bList = snapshot.docs.map(doc => {
-        const data = doc.data();
-        let nextDate = new Date();
-        
-        if (data.dayOfMonth) {
-          const day = Number(data.dayOfMonth);
-          nextDate = setDate(new Date(), day);
-          if (isBefore(nextDate, startOfToday())) {
-            nextDate = addMonths(nextDate, 1);
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const bList = snapshot.docs.map(doc => {
+          const data = doc.data();
+          let nextDate = new Date();
+          
+          if (data.dayOfMonth) {
+            const day = Number(data.dayOfMonth);
+            nextDate = setDate(new Date(), day);
+            if (isBefore(nextDate, startOfToday())) {
+              nextDate = addMonths(nextDate, 1);
+            }
           }
-        }
 
-        return {
-          id: doc.id,
-          ...data,
-          nextDate
-        } as RecurringBill;
-      });
-      setBills(bList);
-      setLoading(false);
-    }, (error) => handleFirestoreError(error, OperationType.LIST, "recurring"));
+          return {
+            id: doc.id,
+            ...data,
+            nextDate
+          } as RecurringBill;
+        });
+        setBills(bList);
+        setLoading(false);
+      },
+      (error) => {
+        toastError(getReadableFirestoreErrorMessage(error));
+        handleFirestoreError(error, OperationType.LIST, "recurring");
+      }
+    );
 
     return () => unsubscribe();
-  }, []);
+  }, [toastError]);
 
   const handleAddBill = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -69,7 +78,7 @@ export default function Recurring() {
     const amount = Number(newBill.amount);
     const day = Number(newBill.dayOfMonth);
 
-    if (!newBill.name || newBill.name.length > 100) {
+    if (!newBill.name.trim() || newBill.name.length > 100) {
       setFormError("Please enter a valid bill name (max 100 chars)");
       return;
     }
@@ -96,7 +105,9 @@ export default function Recurring() {
       });
       setIsModalOpen(false);
       setNewBill({ name: "", amount: "", category: "Subscription", dayOfMonth: "1" });
+      toastSuccess("Recurring bill added!");
     } catch (error) {
+      toastError(getReadableFirestoreErrorMessage(error));
       handleFirestoreError(error, OperationType.CREATE, "recurring");
     }
   };
@@ -107,7 +118,9 @@ export default function Recurring() {
     try {
       await deleteDoc(doc(db, "recurring", id));
       setIsDeleting(null);
+      toastSuccess("Recurring bill deleted.");
     } catch (error) {
+      toastError(getReadableFirestoreErrorMessage(error));
       handleFirestoreError(error, OperationType.DELETE, `recurring/${id}`);
     }
   };

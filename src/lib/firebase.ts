@@ -53,3 +53,44 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }
+
+/**
+ * Extracts a friendly readable error message from Firestore errors or JSON error strings.
+ */
+export function getReadableFirestoreErrorMessage(error: unknown): string {
+  if (!error) return "An unexpected error occurred.";
+
+  const rawMessage = error instanceof Error ? error.message : String(error);
+
+  // Attempt to parse JSON FirestoreErrorInfo
+  try {
+    if (rawMessage.startsWith("{") && rawMessage.endsWith("}")) {
+      const parsed = JSON.parse(rawMessage) as FirestoreErrorInfo;
+      if (parsed.error) {
+        return getReadableFirestoreErrorMessage(parsed.error);
+      }
+    }
+  } catch {
+    // not JSON
+  }
+
+  const lower = rawMessage.toLowerCase();
+  if (lower.includes("permission-denied") || lower.includes("insufficient permissions")) {
+    return "Permission denied. You might need to sign in or don't have access to this resource.";
+  }
+  if (lower.includes("unavailable") || lower.includes("failed to get document because the client is offline")) {
+    return "Database connection temporarily unavailable. Please check your network connection.";
+  }
+  if (lower.includes("quota exceeded") || lower.includes("resource-exhausted")) {
+    return "Database usage quota exceeded for today. Please try again later.";
+  }
+  if (lower.includes("unauthenticated")) {
+    return "Session expired or unauthenticated. Please sign in again.";
+  }
+  if (lower.includes("not-found")) {
+    return "The requested record was not found.";
+  }
+
+  return rawMessage.length > 120 ? `${rawMessage.slice(0, 117)}...` : rawMessage;
+}
+

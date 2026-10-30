@@ -17,7 +17,10 @@ import SharedDashboard from "./pages/SharedDashboard";
 import About from "./pages/About";
 import AIAdvisor from "./pages/AIAdvisor";
 import Planning from "./pages/Planning";
+import NotFound from "./pages/NotFound";
 import Layout from "./components/Layout";
+import ErrorBoundary from "./components/ErrorBoundary";
+import { ToastProvider } from "./context/ToastContext";
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
@@ -45,22 +48,35 @@ export default function App() {
   };
 
   return (
-    <Router>
-      <Routes>
-        <Route path="/auth" element={!isAuthenticated ? <AuthPage onAuthSuccess={() => setIsAuthenticated(true)} /> : <Navigate to="/" />} />
-        
-        <Route element={isAuthenticated ? <Layout onLogout={handleLogout} /> : <Navigate to="/auth" />}>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/activity" element={<Activity />} />
-          <Route path="/planning" element={<Planning />} />
-          <Route path="/reports" element={<Reports />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="/recurring" element={<Recurring />} />
-          <Route path="/shared" element={<SharedDashboard />} />
-          <Route path="/about" element={<About />} />
-          <Route path="/ai-advisor" element={<AIAdvisor />} />
-        </Route>
-      </Routes>
-    </Router>
+    <ErrorBoundary>
+      <ToastProvider>
+        <Router>
+          <Routes>
+            <Route path="/auth" element={!isAuthenticated ? <AuthPage onAuthSuccess={() => setIsAuthenticated(true)} /> : <Navigate to="/" />} />
+            
+            {/* Authenticated Application Shell */}
+            <Route element={isAuthenticated ? <Layout onLogout={handleLogout} /> : <Navigate to="/auth" />}>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/activity" element={<Activity />} />
+              <Route path="/planning" element={<Planning />} />
+              <Route path="/reports" element={<Reports />} />
+              <Route path="/settings" element={<Settings />} />
+              <Route path="/recurring" element={<Recurring />} />
+              <Route path="/shared" element={<SharedDashboard />} />
+              <Route path="/about" element={<About />} />
+              <Route path="/ai-advisor" element={<AIAdvisor />} />
+
+              {/* Convenience / Legacy redirects */}
+              <Route path="/budgets" element={<Navigate to="/planning" replace />} />
+              <Route path="/goals" element={<Navigate to="/planning" replace />} />
+              <Route path="/transactions" element={<Navigate to="/activity" replace />} />
+            </Route>
+
+            {/* 404 Catch-All */}
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </Router>
+      </ToastProvider>
+    </ErrorBoundary>
   );
 }

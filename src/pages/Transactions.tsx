@@ -1,9 +1,12 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Plus, Search, Trash2, TrendingUp, TrendingDown, X } from "lucide-react";
+import { Plus, Search, Trash2, TrendingUp, TrendingDown, X, Target, AlertTriangle, Calendar, Clock } from "lucide-react";
 import { format } from "date-fns";
-import { db, auth, handleFirestoreError, OperationType } from "../lib/firebase";
+import { db, auth, handleFirestoreError, OperationType, getReadableFirestoreErrorMessage } from "../lib/firebase";
 import { useCurrency, formatCurrency } from "../services/currencyService";
+import { useToast } from "../context/ToastContext";
+import { parseFirestoreDate } from "../utils/dateUtils";
+import { onAuthStateChanged, User } from "firebase/auth";
 import { 
   collection, 
   addDoc, 
@@ -12,10 +15,22 @@ import {
   onSnapshot, 
   deleteDoc, 
   doc, 
-  serverTimestamp,
-  orderBy,
+  serverTimestamp, 
   updateDoc
 } from "firebase/firestore";
+
+export const TRANSACTION_CATEGORIES = [
+  "Shopping",
+  "Food",
+  "Home",
+  "Travel",
+  "Healthcare",
+  "Education",
+  "Entertainment",
+  "Savings & Goals",
+  "Salary & Income",
+  "Other"
+];
 
 type Transaction = {
   id: string;
@@ -28,43 +43,125 @@ type Transaction = {
 
 export default function Transactions() {
   const { currency } = useCurrency();
+  const { success: toastSuccess, error: toastError } = useToast();
   const [searchTerm, setSearchTerm] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<"all" | "income" | "expense">("all");
-  const [newTx, setNewTx] = useState({ name: "", amount: "", type: "expense" as const, category: "Shopping" });
+  const [newTx, setNewTx] = useState<{ name: string; amount: string; type: "expense" | "income"; category: string }>({ 
+    name: "", 
+    amount: "", 
+    type: "expense", 
+    category: "Shopping" 
+  });
 
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
 
+  const [currentUser, setCurrentUser] = useState<User | null>(auth.currentUser);
+
   useEffect(() => {
-    if (!auth.currentUser) return;
+    const unsubAuth = onAuthStateChanged(auth, (user) => {
+      setCurrentUser(user);
+    });
+    return () => unsubAuth();
+  }, []);
+
+  useEffect(() => {
+    if (!currentUser) {
+      setLoading(false);
+      return;
+    }
 
     const q = query(
       collection(db, "transactions"),
-      where("userId", "==", auth.currentUser.uid),
-      orderBy("date", "desc")
+      where("userId", "==", currentUser.uid)
     );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const txs = snapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          ...data,
-          date: (data.date as any)?.toDate?.() || (data.date instanceof Date ? data.date : new Date())
-        } as Transaction;
-      });
-      setTransactions(txs);
-      setLoading(false);
-    }, (error) => handleFirestoreError(error, OperationType.LIST, "transactions"));
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const txs = snapshot.docs.map(docSnap => {
+          const data = docSnap.data();
+          const rawAmount = typeof data.amount === "number" ? data.amount : parseFloat(String(data.amount || 0));
+          const normalizedType = String(data.type || "expense").trim().toLowerCase() === "income" ? "income" : "expense";
+          return {
+            id: docSnap.id,
+            name: data.name || "Untitled",
+            category: data.category || "General",
+            amount: isNaN(rawAmount) ? 0 : Math.abs(rawAmount),
+            date: parseFirestoreDate(data.date),
+            type: normalizedType,
+          } as Transaction;
+        });
+
+        // Sort descending by date
+        txs.sort((a, b) => b.date.getTime() - a.date.getTime());
+        setTransactions(txs);
+        setLoading(false);
+      },
+      (error) => {
+        setLoading(false);
+        toastError(getReadableFirestoreErrorMessage(error));
+        handleFirestoreError(error, OperationType.LIST, "transactions");
+      }
+    );
 
     return () => unsubscribe();
-  }, []);
+  }, [currentUser, toastError]);
 
   const totalIncome = transactions.filter(t => t.type === 'income').reduce((acc, t) => acc + t.amount, 0);
   const totalExpense = transactions.filter(t => t.type === 'expense').reduce((acc, t) => acc + t.amount, 0);
+
+  // Calculate chronological running balance after each transaction
+  const balanceMap = useMemo(() => {
+    // Sort ascending (earliest to latest) to accumulate balance
+    const ascending = [...transactions].sort((a, b) => {
+      const diff = a.date.getTime() - b.date.getTime();
+      return diff !== 0 ? diff : a.id.localeCompare(b.id);
+    });
+    let running = 0;
+    const map: Record<string, number> = {};
+    for (const t of ascending) {
+      if (t.type === "income") {
+        running += t.amount;
+      } else {
+        running -= t.amount;
+      }
+      map[t.id] = running;
+    }
+    return map;
+  }, [transactions]);
+
+  // Detect transactions that were erroneously marked as Income for goals or savings
+  const misclassifiedGoalTxs = transactions.filter(t => 
+    t.type === "income" && (
+      t.name.toLowerCase().includes("goal") || 
+      t.category.toLowerCase().includes("goal") ||
+      t.category.toLowerCase().includes("saving")
+    )
+  );
+
+  const [isFixingGoals, setIsFixingGoals] = useState(false);
+
+  const handleFixMisclassifiedGoals = async () => {
+    setIsFixingGoals(true);
+    try {
+      for (const t of misclassifiedGoalTxs) {
+        await updateDoc(doc(db, "transactions", t.id), {
+          type: "expense",
+          category: "Savings & Goals"
+        });
+      }
+      toastSuccess(`Updated ${misclassifiedGoalTxs.length} goal transaction(s) to Savings Outflow! Your Total Income is now accurate.`);
+    } catch (err) {
+      toastError(getReadableFirestoreErrorMessage(err));
+      handleFirestoreError(err, OperationType.UPDATE, "transactions");
+    } finally {
+      setIsFixingGoals(false);
+    }
+  };
 
   const filtered = transactions.filter(t => {
     const matchesSearch = t.name.toLowerCase().includes(searchTerm.toLowerCase()) || t.category.toLowerCase().includes(searchTerm.toLowerCase());
@@ -83,6 +180,10 @@ export default function Transactions() {
     e.preventDefault();
     if (!auth.currentUser) return;
     const amount = Number(newTx.amount);
+    if (!newTx.name.trim()) {
+      setFormError("Please enter a transaction title");
+      return;
+    }
     if (isNaN(amount) || amount <= 0) {
       setFormError("Please enter a valid amount greater than 0");
       return;
@@ -91,7 +192,7 @@ export default function Transactions() {
     try {
       await addDoc(collection(db, "transactions"), {
         userId: auth.currentUser.uid,
-        name: newTx.name,
+        name: newTx.name.trim(),
         amount: amount,
         type: newTx.type,
         category: newTx.category,
@@ -99,7 +200,9 @@ export default function Transactions() {
       });
       setIsModalOpen(false);
       setNewTx({ name: "", amount: "", type: "expense", category: "Shopping" });
+      toastSuccess("Transaction added successfully!");
     } catch (error) {
+      toastError(getReadableFirestoreErrorMessage(error));
       handleFirestoreError(error, OperationType.CREATE, "transactions");
     }
   };
@@ -108,6 +211,10 @@ export default function Transactions() {
     e.preventDefault();
     if (!editingTx) return;
     const amount = Number(editingTx.amount);
+    if (!editingTx.name.trim()) {
+      setFormError("Please enter a transaction title");
+      return;
+    }
     if (isNaN(amount) || amount <= 0) {
       setFormError("Please enter a valid amount greater than 0");
       return;
@@ -117,10 +224,13 @@ export default function Transactions() {
       const { id, ...data } = editingTx;
       await updateDoc(doc(db, "transactions", id), {
         ...data,
+        name: editingTx.name.trim(),
         amount: amount
       });
       setEditingTx(null);
+      toastSuccess("Transaction updated successfully!");
     } catch (error) {
+      toastError(getReadableFirestoreErrorMessage(error));
       handleFirestoreError(error, OperationType.UPDATE, `transactions/${editingTx.id}`);
     }
   };
@@ -132,7 +242,9 @@ export default function Transactions() {
       await deleteDoc(doc(db, "transactions", id));
       if (editingTx?.id === id) setEditingTx(null);
       setIsDeleting(null);
+      toastSuccess("Transaction deleted.");
     } catch (error) {
+      toastError(getReadableFirestoreErrorMessage(error));
       handleFirestoreError(error, OperationType.DELETE, `transactions/${id}`);
     }
   };
@@ -143,6 +255,33 @@ export default function Transactions() {
         <h2 className="text-[10px] font-bold uppercase tracking-widest text-[#94a3b8]">All Transactions</h2>
         <h1 className="text-3xl font-extrabold tracking-tighter text-gray-900 leading-none">Activity</h1>
       </div>
+
+      {/* Misclassified Goals Alert & 1-Click Fix */}
+      {misclassifiedGoalTxs.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200/90 rounded-[28px] p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm">
+          <div className="flex items-center gap-3.5">
+            <div className="w-11 h-11 rounded-2xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-sm">
+              <Target size={22} />
+            </div>
+            <div>
+              <p className="text-xs font-black text-amber-950">
+                {misclassifiedGoalTxs.length === 1 ? "1 Goal entry is counted as Income" : `${misclassifiedGoalTxs.length} Goal entries are counted as Income`}
+              </p>
+              <p className="text-[11px] text-amber-800 font-medium leading-tight mt-0.5">
+                Goals represent savings set aside, not earnings. Reclassifying as Savings Outflow corrects your Total Income.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleFixMisclassifiedGoals}
+            disabled={isFixingGoals}
+            className="px-5 py-2.5 bg-amber-600 text-white rounded-xl text-xs font-black uppercase tracking-wider hover:bg-amber-700 transition shrink-0 active:scale-95 disabled:opacity-50 cursor-pointer shadow-sm"
+          >
+            {isFixingGoals ? "Correcting..." : "Fix to Savings (-)"}
+          </button>
+        </div>
+      )}
 
       <div className="relative">
         <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -192,35 +331,120 @@ export default function Transactions() {
         ) : Object.entries(grouped).map(([date, txs]) => (
           <div key={date} className="space-y-4">
              <h3 className="text-[10px] font-bold uppercase tracking-widest text-[#94a3b8] px-1">{date}</h3>
-             <div className="space-y-3">
-                {txs.map((tx) => (
-                  <motion.div 
-                    layout
-                    key={tx.id} 
-                    onClick={() => setEditingTx(tx)}
-                    className="bg-white border border-gray-50 rounded-[32px] p-5 flex items-center gap-4 group hover:border-[#a78bfa]/30 transition-all shadow-sm cursor-pointer active:scale-[0.98]"
-                  >
-                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${tx.type === 'income' ? 'bg-emerald-50 text-emerald-500' : 'bg-violet-50 text-violet-500'}`}>
-                      {tx.type === 'income' ? <TrendingDown className="rotate-180" size={24} /> : <TrendingUp size={24} />}
-                    </div>
-                    <div className="flex-1">
-                      <h4 className="font-bold text-gray-900 text-sm leading-none mb-1">{tx.name}</h4>
-                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-none">{tx.category} • {format(tx.date, "h:mm a")}</p>
-                    </div>
-                    <div className="text-right flex flex-col items-end gap-1">
-                       <p className={`text-lg font-bold tracking-tighter ${tx.type === 'income' ? 'text-emerald-500' : 'text-gray-900'}`}>
-                          {tx.type === 'expense' ? '-' : '+'}{formatCurrency(tx.amount, currency)}
-                       </p>
-                       <button 
-                          onClick={(e) => { e.stopPropagation(); setIsDeleting(tx.id); }} 
-                          className="p-1 text-gray-200 hover:text-rose-500 transition-colors"
-                        >
-                          <Trash2 size={14} />
-                       </button>
-                    </div>
-                  </motion.div>
-                ))}
-             </div>
+              <div className="space-y-3">
+                {txs.map((tx) => {
+                  const isGoalOrSavings = tx.category === "Savings & Goals" || tx.name.toLowerCase().includes("goal") || tx.category.toLowerCase().includes("goal");
+                  const balanceAfter = balanceMap[tx.id] ?? 0;
+                  const isExpense = tx.type === "expense";
+
+                  return (
+                    <motion.div 
+                      layout
+                      key={tx.id} 
+                      onClick={() => setEditingTx(tx)}
+                      className="bg-white border border-gray-100 rounded-2xl sm:rounded-3xl p-4 sm:p-5 shadow-sm hover:shadow-md hover:border-violet-200/60 transition-all cursor-pointer active:scale-[0.99] group"
+                    >
+                      {/* Top Section */}
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3.5 min-w-0 flex-1">
+                          <div className={`w-11 h-11 sm:w-12 sm:h-12 rounded-2xl flex items-center justify-center shrink-0 shadow-xs ${
+                            isGoalOrSavings
+                              ? 'bg-violet-50 text-violet-600'
+                              : isExpense
+                              ? 'bg-rose-50 text-rose-500'
+                              : 'bg-emerald-50 text-emerald-500'
+                          }`}>
+                            {isGoalOrSavings ? (
+                              <Target size={22} />
+                            ) : isExpense ? (
+                              <TrendingUp size={22} />
+                            ) : (
+                              <TrendingDown className="rotate-180" size={22} />
+                            )}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <h4 className="font-bold text-gray-900 text-sm sm:text-base leading-snug truncate">
+                                {tx.name}
+                              </h4>
+                              {isGoalOrSavings && (
+                                <span className="px-2 py-0.5 bg-violet-100 text-violet-700 text-[9px] font-black rounded-full uppercase tracking-wider shrink-0">
+                                  Savings
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider truncate">
+                              {tx.category}
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Amount + Divider + Delete Button */}
+                        <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
+                          <p className={`text-base sm:text-lg md:text-xl font-bold tracking-tight ${
+                            isGoalOrSavings
+                              ? 'text-violet-600'
+                              : isExpense
+                              ? 'text-rose-600'
+                              : 'text-emerald-600'
+                          }`}>
+                            {isExpense ? '-' : '+'}{formatCurrency(tx.amount, currency)}
+                          </p>
+
+                          <div className="h-6 sm:h-7 w-px bg-gray-200 shrink-0" />
+
+                          <button 
+                            type="button"
+                            onClick={(e) => { 
+                              e.stopPropagation(); 
+                              setIsDeleting(tx.id); 
+                            }} 
+                            title="Delete transaction"
+                            aria-label="Delete transaction"
+                            className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-gray-50 hover:bg-rose-50 text-gray-400 hover:text-rose-600 flex items-center justify-center transition-colors shrink-0 active:scale-95"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Thin Horizontal Divider */}
+                      <hr className="border-t border-gray-100 my-3.5" />
+
+                      {/* Bottom Section */}
+                      <div className="flex items-center justify-between flex-wrap gap-y-2 text-xs">
+                        <div className="flex items-center gap-2.5 sm:gap-3">
+                          {/* Date */}
+                          <div className="flex items-center gap-1.5 text-gray-500 font-medium">
+                            <Calendar size={13} className="text-gray-400 shrink-0" />
+                            <span>{format(tx.date, "MMM dd, yyyy")}</span>
+                          </div>
+
+                          {/* Divider */}
+                          <div className="h-3.5 w-px bg-gray-200 shrink-0" />
+
+                          {/* Time */}
+                          <div className="flex items-center gap-1.5 text-gray-500 font-medium">
+                            <Clock size={13} className="text-gray-400 shrink-0" />
+                            <span>{format(tx.date, "h:mm a")}</span>
+                          </div>
+                        </div>
+
+                        {/* Divider on desktop */}
+                        <div className="hidden sm:block h-3.5 w-px bg-gray-200 shrink-0" />
+
+                        {/* Balance after transaction */}
+                        <div className="flex items-center gap-1.5 ml-auto sm:ml-0 font-medium">
+                          <span className="text-gray-400">Balance:</span>
+                          <span className="font-bold text-blue-600">
+                            {formatCurrency(balanceAfter, currency)}
+                          </span>
+                        </div>
+                      </div>
+                    </motion.div>
+                  );
+                })}
+              </div>
           </div>
         ))}
       </div>
@@ -275,8 +499,8 @@ export default function Transactions() {
                               className="w-full bg-gray-50 border-none rounded-2xl p-4 text-sm font-bold focus:ring-4 focus:ring-violet-50 transition-all outline-none appearance-none"
                               value={editingTx.type} onChange={e => setEditingTx({...editingTx, type: e.target.value as any})}
                            >
-                              <option value="expense">Expense (-)</option>
-                              <option value="income">Income (+)</option>
+                              <option value="expense">Expense / Savings (-)</option>
+                              <option value="income">Income / Earnings (+)</option>
                            </select>
                         </div>
                      </div>
@@ -287,11 +511,20 @@ export default function Transactions() {
                            className="w-full bg-gray-50 border-none rounded-2xl p-4 text-sm font-bold focus:ring-4 focus:ring-violet-50 transition-all outline-none appearance-none"
                            value={editingTx.category} onChange={e => setEditingTx({...editingTx, category: e.target.value})}
                         >
-                           {["Shopping", "Food", "Home", "Travel", "Healthcare", "Education", "Entertainment", "Other"].map(cat => (
+                           {TRANSACTION_CATEGORIES.map(cat => (
                              <option key={cat} value={cat}>{cat}</option>
                            ))}
                         </select>
                      </div>
+
+                     {editingTx.type === "income" && (editingTx.category === "Savings & Goals" || editingTx.name.toLowerCase().includes("goal") || editingTx.name.toLowerCase().includes("saving")) && (
+                       <div className="p-3 bg-amber-50 border border-amber-200/80 rounded-2xl flex items-start gap-2.5 text-left">
+                         <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+                         <p className="text-[11px] text-amber-800 leading-tight">
+                           <strong>Notice:</strong> Goals represent money set aside into savings, not new earnings. Choose <strong>Expense / Savings (-)</strong> to prevent inflating your Total Income.
+                         </p>
+                       </div>
+                     )}
                   </div>
 
                   <div className="grid grid-cols-2 gap-3 pt-4">
@@ -372,18 +605,39 @@ export default function Transactions() {
                            />
                         </div>
                         <div className="space-y-1">
-                           <label className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Type</label>
+                           <label className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Flow Type</label>
                            <select 
                               className="w-full bg-gray-50 border-none rounded-2xl p-4 text-sm font-bold focus:ring-2 focus:ring-[#a78bfa] transition-all"
                               value={newTx.type} onChange={e => setNewTx({...newTx, type: e.target.value as any})}
                            >
-                              <option value="expense">Expense</option>
-                              <option value="income">Income</option>
+                              <option value="expense">Expense / Savings (-)</option>
+                              <option value="income">Income / Earnings (+)</option>
                            </select>
                         </div>
                      </div>
+
+                     <div className="space-y-1">
+                        <label className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Category</label>
+                        <select 
+                           className="w-full bg-gray-50 border-none rounded-2xl p-4 text-sm font-bold focus:ring-2 focus:ring-[#a78bfa] transition-all"
+                           value={newTx.category} onChange={e => setNewTx({...newTx, category: e.target.value})}
+                        >
+                           {TRANSACTION_CATEGORIES.map(cat => (
+                             <option key={cat} value={cat}>{cat}</option>
+                           ))}
+                        </select>
+                     </div>
+
+                     {newTx.type === "income" && (newTx.category === "Savings & Goals" || newTx.name.toLowerCase().includes("goal") || newTx.name.toLowerCase().includes("saving")) && (
+                       <div className="p-3 bg-amber-50 border border-amber-200/80 rounded-2xl flex items-start gap-2.5 text-left">
+                         <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+                         <p className="text-[11px] text-amber-800 leading-tight">
+                           <strong>Notice:</strong> Goals are savings set aside, not earnings. If this is money for a goal, choose <strong>Expense / Savings (-)</strong> to keep your Total Income accurate.
+                         </p>
+                       </div>
+                     )}
                   </div>
-                  <button type="submit" className="w-full bg-[#7c3aed] text-white py-4 rounded-2xl font-bold shadow-lg hover:shadow-indigo-200 transition-all">Add Transaction</button>
+                  <button type="submit" className="w-full bg-[#7c3aed] text-white py-4 rounded-2xl font-bold shadow-lg hover:shadow-indigo-200 transition-all cursor-pointer">Add Transaction</button>
                </form>
             </motion.div>
           </div>

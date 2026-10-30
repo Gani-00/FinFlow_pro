@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { auth, db, handleFirestoreError, OperationType } from "../lib/firebase";
+import { auth, db, handleFirestoreError, OperationType, getReadableFirestoreErrorMessage } from "../lib/firebase";
 import { signOut, updateProfile } from "firebase/auth";
 import { collection, query, where, getDocs, writeBatch, doc, serverTimestamp, orderBy } from "firebase/firestore";
 import { motion, AnimatePresence } from "motion/react";
@@ -8,26 +8,38 @@ import { useNavigate } from "react-router-dom";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { useCurrency, currencies } from "../services/currencyService";
+import { useToast } from "../context/ToastContext";
 
 export default function Settings() {
   const navigate = useNavigate();
+  const { success: toastSuccess, error: toastError } = useToast();
   const [loading, setLoading] = useState(false);
   const { currency, updateCurrency } = useCurrency();
   const [isEditingName, setIsEditingName] = useState(false);
   const [newName, setNewName] = useState(auth.currentUser?.displayName || "");
 
   const handleLogout = async () => {
-    await signOut(auth);
+    try {
+      await signOut(auth);
+    } catch (err) {
+      toastError("Failed to sign out. Please try again.");
+    }
   };
 
   const handleUpdateName = async () => {
     if (!auth.currentUser) return;
+    if (!newName.trim()) {
+      toastError("Please enter a valid display name.");
+      return;
+    }
     setLoading(true);
     try {
-      await updateProfile(auth.currentUser, { displayName: newName });
+      await updateProfile(auth.currentUser, { displayName: newName.trim() });
       setIsEditingName(false);
-    } catch (err) {
+      toastSuccess("Profile name updated successfully!");
+    } catch (err: any) {
       console.error(err);
+      toastError(err?.message || "Failed to update profile name.");
     } finally {
       setLoading(false);
     }
@@ -60,8 +72,10 @@ export default function Settings() {
       });
       await batch.commit();
       setShowDemoSuccess(true);
+      toastSuccess("Demo financial transactions seeded successfully!");
       setTimeout(() => setShowDemoSuccess(false), 3000);
     } catch (err) {
+      toastError(getReadableFirestoreErrorMessage(err));
       handleFirestoreError(err, OperationType.CREATE, "transactions");
     } finally {
       setLoading(false);
@@ -85,8 +99,10 @@ export default function Settings() {
 
       setIsResetting(false);
       setShowResetSuccess(true);
+      toastSuccess("All personal data reset successfully.");
       setTimeout(() => setShowResetSuccess(false), 3000);
     } catch (err) {
+      toastError(getReadableFirestoreErrorMessage(err));
       handleFirestoreError(err, OperationType.DELETE, "all");
     } finally {
       setLoading(false);

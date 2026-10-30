@@ -1,7 +1,8 @@
 import { motion, AnimatePresence } from "motion/react";
 import { Users, Plus, Mail, ArrowRight, Check, X, Shield } from "lucide-react";
 import { useState, useEffect } from "react";
-import { db, auth, handleFirestoreError, OperationType } from "../lib/firebase";
+import { db, auth, handleFirestoreError, OperationType, getReadableFirestoreErrorMessage } from "../lib/firebase";
+import { useToast } from "../context/ToastContext";
 import { 
   collection, 
   query, 
@@ -24,6 +25,7 @@ type Partner = {
 };
 
 export default function SharedDashboard() {
+  const { success: toastSuccess, error: toastError } = useToast();
   const [inviteEmail, setInviteEmail] = useState("");
   const [partners, setPartners] = useState<Partner[]>([]);
   const [loading, setLoading] = useState(true);
@@ -36,47 +38,64 @@ export default function SharedDashboard() {
     const q1 = query(collection(db, "partners"), where("senderId", "==", auth.currentUser.uid));
     const q2 = query(collection(db, "partners"), where("email", "==", auth.currentUser.email));
 
-    const unsub1 = onSnapshot(q1, (snap) => {
-       const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as Partner));
-       setPartners(prev => {
+    const unsub1 = onSnapshot(
+      q1,
+      (snap) => {
+        const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as Partner));
+        setPartners(prev => {
           const received = prev.filter(p => p.email === auth.currentUser?.email);
           return [...list, ...received];
-       });
-       setLoading(false);
-    });
+        });
+        setLoading(false);
+      },
+      (error) => {
+        toastError(getReadableFirestoreErrorMessage(error));
+        handleFirestoreError(error, OperationType.LIST, "partners");
+      }
+    );
 
-    const unsub2 = onSnapshot(q2, (snap) => {
-       const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as Partner));
-       setPartners(prev => {
+    const unsub2 = onSnapshot(
+      q2,
+      (snap) => {
+        const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as Partner));
+        setPartners(prev => {
           const sent = prev.filter(p => p.senderId === auth.currentUser?.uid);
           return [...sent, ...list];
-       });
-       setLoading(false);
-    });
+        });
+        setLoading(false);
+      },
+      (error) => {
+        toastError(getReadableFirestoreErrorMessage(error));
+        handleFirestoreError(error, OperationType.LIST, "partners");
+      }
+    );
 
     return () => { unsub1(); unsub2(); };
-  }, []);
+  }, [toastError]);
 
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!auth.currentUser || !inviteEmail) return;
-    if (inviteEmail === auth.currentUser.email) {
-       setMsg("You cannot invite yourself!");
-       return;
+    if (!auth.currentUser || !inviteEmail.trim()) return;
+    if (inviteEmail.toLowerCase() === auth.currentUser.email?.toLowerCase()) {
+      setMsg("You cannot invite yourself!");
+      toastError("You cannot invite yourself!");
+      return;
     }
 
     try {
       await addDoc(collection(db, "partners"), {
         senderId: auth.currentUser.uid,
         senderName: auth.currentUser.displayName || auth.currentUser.email?.split('@')[0],
-        email: inviteEmail.toLowerCase(),
+        email: inviteEmail.trim().toLowerCase(),
         status: "pending",
         createdAt: serverTimestamp()
       });
       setInviteEmail("");
       setMsg("Invitation sent!");
+      toastSuccess("Invitation sent!");
       setTimeout(() => setMsg(""), 3000);
     } catch (error) {
+      toastError(getReadableFirestoreErrorMessage(error));
       handleFirestoreError(error, OperationType.CREATE, "partners");
     }
   };
@@ -87,7 +106,9 @@ export default function SharedDashboard() {
         status: "accepted",
         receiverId: auth.currentUser?.uid
       });
+      toastSuccess("Invitation accepted!");
     } catch (error) {
+      toastError(getReadableFirestoreErrorMessage(error));
       handleFirestoreError(error, OperationType.UPDATE, `partners/${id}`);
     }
   };
@@ -95,12 +116,14 @@ export default function SharedDashboard() {
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
 
   const removePartner = async (id: string) => {
-     try {
-       await deleteDoc(doc(db, "partners", id));
-       setIsDeleting(null);
-     } catch (error) {
-       handleFirestoreError(error, OperationType.DELETE, `partners/${id}`);
-     }
+    try {
+      await deleteDoc(doc(db, "partners", id));
+      setIsDeleting(null);
+      toastSuccess("Partner link removed.");
+    } catch (error) {
+      toastError(getReadableFirestoreErrorMessage(error));
+      handleFirestoreError(error, OperationType.DELETE, `partners/${id}`);
+    }
   };
 
   return (

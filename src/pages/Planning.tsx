@@ -2,11 +2,13 @@ import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   Plus, Target, AlertCircle, X, Trash2, PieChart, Wallet, 
-  Trophy, Car, Home, Laptop, Plane, TrendingUp, ChevronRight 
+  Trophy, Car, Home, Laptop, Plane, TrendingUp, ChevronRight, Edit2 
 } from "lucide-react";
-import { db, auth, handleFirestoreError, OperationType } from "../lib/firebase";
+import { db, auth, handleFirestoreError, OperationType, getReadableFirestoreErrorMessage } from "../lib/firebase";
 import { useCurrency, formatCurrency } from "../services/currencyService";
+import { useToast } from "../context/ToastContext";
 import { startOfMonth } from "date-fns";
+import { parseFirestoreDate } from "../utils/dateUtils";
 import { 
   collection, 
   query, 
@@ -15,7 +17,8 @@ import {
   addDoc,
   doc,
   deleteDoc,
-  updateDoc
+  updateDoc,
+  serverTimestamp
 } from "firebase/firestore";
 
 // --- Types ---
@@ -56,6 +59,7 @@ const GOAL_ICONS = [
 
 export default function Planning() {
   const { currency } = useCurrency();
+  const { success: toastSuccess, error: toastError } = useToast();
   const [activeTab, setActiveTab] = useState<"budgets" | "goals">("budgets");
 
   // --- Common States ---
@@ -75,6 +79,7 @@ export default function Planning() {
   const [isAddFundsOpen, setIsAddFundsOpen] = useState(false);
   const [selectedGoal, setSelectedGoal] = useState<Goal | null>(null);
   const [addFundsAmount, setAddFundsAmount] = useState("");
+  const [deductFromBalance, setDeductFromBalance] = useState(true);
   const [newGoal, setNewGoal] = useState({ name: "", target: "", icon: "Trophy" });
   const [isEditGoalModalOpen, setIsEditGoalModalOpen] = useState(false);
   const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
@@ -85,44 +90,75 @@ export default function Planning() {
 
     // Fetch Budgets
     const qB = query(collection(db, "budgets"), where("userId", "==", auth.currentUser.uid));
-    const unsubscribeB = onSnapshot(qB, (snapshot) => {
-      const bList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      const transformed = bList.map((b: any) => {
+    const unsubscribeB = onSnapshot(
+      qB,
+      (snapshot) => {
+        const bList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const transformed = bList.map((b: any) => {
           const config = BUDGET_CATEGORIES.find(c => c.name === b.category) || BUDGET_CATEGORIES[BUDGET_CATEGORIES.length - 1];
           return {
-              ...b,
-              spent: 0,
-              color: config.color
+            ...b,
+            spent: 0,
+            color: config.color
           };
-      });
-      setBudgets(transformed);
-    }, (error) => handleFirestoreError(error, OperationType.LIST, "budgets"));
+        });
+        setBudgets(transformed);
+      },
+      (error) => {
+        toastError(getReadableFirestoreErrorMessage(error));
+        handleFirestoreError(error, OperationType.LIST, "budgets");
+      }
+    );
 
     // Fetch Transactions (for budgets)
-    const qT = query(collection(db, "transactions"), where("userId", "==", auth.currentUser.uid), where("type", "==", "expense"));
-    const unsubscribeT = onSnapshot(qT, (snapshot) => {
-      setTransactions(snapshot.docs.map(doc => doc.data()));
-    }, (error) => handleFirestoreError(error, OperationType.LIST, "transactions"));
+    const qT = query(collection(db, "transactions"), where("userId", "==", auth.currentUser.uid));
+    const unsubscribeT = onSnapshot(
+      qT,
+      (snapshot) => {
+        const txs = snapshot.docs.map(doc => {
+          const data = doc.data();
+          return {
+            ...data,
+            id: doc.id,
+            date: parseFirestoreDate(data.date),
+            amount: Number(data.amount) || 0,
+            type: String(data.type || "expense").trim().toLowerCase()
+          };
+        });
+        setTransactions(txs.filter((t: any) => t.type === "expense"));
+      },
+      (error) => {
+        toastError(getReadableFirestoreErrorMessage(error));
+        handleFirestoreError(error, OperationType.LIST, "transactions");
+      }
+    );
 
     // Fetch Goals
     const qG = query(collection(db, "goals"), where("userId", "==", auth.currentUser.uid));
-    const unsubscribeG = onSnapshot(qG, (snapshot) => {
-      setGoals(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Goal[]);
-    }, (error) => handleFirestoreError(error, OperationType.LIST, "goals"));
+    const unsubscribeG = onSnapshot(
+      qG,
+      (snapshot) => {
+        setGoals(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Goal[]);
+      },
+      (error) => {
+        toastError(getReadableFirestoreErrorMessage(error));
+        handleFirestoreError(error, OperationType.LIST, "goals");
+      }
+    );
 
     return () => {
       unsubscribeB();
       unsubscribeT();
       unsubscribeG();
     };
-  }, []);
+  }, [toastError]);
 
   // --- Budgets Logic ---
   const budgetsWithSpent = budgets.map(b => {
     const startOfThisMonth = startOfMonth(new Date());
     const spent = transactions
-      .filter(t => t.category === b.category && new Date(t.date) >= startOfThisMonth)
-      .reduce((acc, t) => acc + Number(t.amount), 0);
+      .filter(t => t.category === b.category && t.date >= startOfThisMonth)
+      .reduce((acc, t) => acc + Number(t.amount || 0), 0);
     return { ...b, spent };
   });
 
@@ -148,7 +184,9 @@ export default function Planning() {
       });
       setIsBudgetModalOpen(false);
       setNewBudget({ category: "Shopping", limit: "" });
+      toastSuccess("Budget strategy created!");
     } catch (error) {
+      toastError(getReadableFirestoreErrorMessage(error));
       handleFirestoreError(error, OperationType.CREATE, "budgets");
     }
   };
@@ -165,8 +203,22 @@ export default function Planning() {
     try {
       await updateDoc(doc(db, "budgets", editingBudget.id), { limit: limit });
       setEditingBudget(null);
+      toastSuccess("Budget limit updated!");
     } catch (error) {
+      toastError(getReadableFirestoreErrorMessage(error));
       handleFirestoreError(error, OperationType.UPDATE, `budgets/${editingBudget.id}`);
+    }
+  };
+
+  const removeBudget = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, "budgets", id));
+      setIsDeletingBudget(null);
+      if (editingBudget?.id === id) setEditingBudget(null);
+      toastSuccess("Budget strategy deleted.");
+    } catch (error) {
+      toastError(getReadableFirestoreErrorMessage(error));
+      handleFirestoreError(error, OperationType.DELETE, `budgets/${id}`);
     }
   };
 
@@ -178,34 +230,112 @@ export default function Planning() {
   const handleAddGoal = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!auth.currentUser) return;
+    const target = Number(newGoal.target);
+    if (!newGoal.name.trim()) {
+      toastError("Please enter a goal name");
+      return;
+    }
+    if (isNaN(target) || target <= 0) {
+      toastError("Please enter a valid target amount greater than 0");
+      return;
+    }
     try {
       await addDoc(collection(db, "goals"), {
         userId: auth.currentUser.uid,
-        name: newGoal.name,
-        target: Number(newGoal.target),
+        name: newGoal.name.trim(),
+        target: target,
         current: 0,
         icon: newGoal.icon,
         color: "bg-violet-500"
       });
       setIsGoalModalOpen(false);
       setNewGoal({ name: "", target: "", icon: "Trophy" });
+      toastSuccess("Savings goal created!");
     } catch (error) {
+      toastError(getReadableFirestoreErrorMessage(error));
       handleFirestoreError(error, OperationType.CREATE, "goals");
+    }
+  };
+
+  const handleEditGoal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingGoal) return;
+    const target = Number(editingGoal.target);
+    if (!editingGoal.name.trim()) {
+      toastError("Please enter a goal name");
+      return;
+    }
+    if (isNaN(target) || target <= 0) {
+      toastError("Please enter a valid target amount greater than 0");
+      return;
+    }
+    try {
+      await updateDoc(doc(db, "goals", editingGoal.id), {
+        name: editingGoal.name.trim(),
+        target: target,
+        icon: editingGoal.icon
+      });
+      setIsEditGoalModalOpen(false);
+      setEditingGoal(null);
+      toastSuccess("Savings goal updated!");
+    } catch (error) {
+      toastError(getReadableFirestoreErrorMessage(error));
+      handleFirestoreError(error, OperationType.UPDATE, `goals/${editingGoal.id}`);
     }
   };
 
   const handleAddFunds = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedGoal) return;
+    if (!selectedGoal || !auth.currentUser) return;
+    const amount = Number(addFundsAmount);
+    if (isNaN(amount) || amount <= 0) {
+      toastError("Please enter an amount greater than 0");
+      return;
+    }
     try {
+      // 1. Update Goal saved progress
       await updateDoc(doc(db, "goals", selectedGoal.id), {
-        current: selectedGoal.current + Number(addFundsAmount)
+        current: selectedGoal.current + amount
       });
+
+      // 2. Optionally record as savings deduction from cash balance (Expense), NEVER Income
+      if (deductFromBalance) {
+        await addDoc(collection(db, "transactions"), {
+          userId: auth.currentUser.uid,
+          name: `Savings: ${selectedGoal.name}`,
+          amount: amount,
+          type: "expense",
+          category: "Savings & Goals",
+          date: serverTimestamp()
+        });
+      }
+
       setIsAddFundsOpen(false);
       setAddFundsAmount("");
       setSelectedGoal(null);
+      toastSuccess(
+        deductFromBalance
+          ? `Added ${formatCurrency(amount, currency)} to goal (recorded as savings deduction from wallet)!`
+          : `Added ${formatCurrency(amount, currency)} to goal!`
+      );
     } catch (error) {
+      toastError(getReadableFirestoreErrorMessage(error));
       handleFirestoreError(error, OperationType.UPDATE, `goals/${selectedGoal.id}`);
+    }
+  };
+
+  const removeGoal = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, "goals", id));
+      setIsDeletingGoal(null);
+      if (editingGoal?.id === id) {
+        setEditingGoal(null);
+        setIsEditGoalModalOpen(false);
+      }
+      toastSuccess("Savings goal deleted.");
+    } catch (error) {
+      toastError(getReadableFirestoreErrorMessage(error));
+      handleFirestoreError(error, OperationType.DELETE, `goals/${id}`);
     }
   };
 
@@ -443,7 +573,10 @@ export default function Planning() {
           <div className="fixed inset-0 z-50 flex items-center justify-center p-6 text-gray-900">
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsGoalModalOpen(false)} className="absolute inset-0 bg-black/20 backdrop-blur-sm" />
             <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} className="relative bg-white w-full max-w-sm rounded-[44px] shadow-2xl p-8 space-y-6">
-               <h2 className="text-2xl font-black tracking-tight">Set Savings Goal</h2>
+               <div className="flex justify-between items-center">
+                 <h2 className="text-2xl font-black tracking-tight">Set Savings Goal</h2>
+                 <button onClick={() => setIsGoalModalOpen(false)} className="p-2 text-gray-400 hover:text-gray-600"><X size={20} /></button>
+               </div>
                <form onSubmit={handleAddGoal} className="space-y-6">
                   <div className="space-y-4">
                      <div className="space-y-1">
@@ -455,8 +588,112 @@ export default function Planning() {
                         <input type="number" required placeholder="0.00" className="w-full bg-gray-50 border-none rounded-2xl p-4 text-sm font-bold focus:ring-2 focus:ring-violet-50 outline-none transition-all" value={newGoal.target} onChange={e => setNewGoal({...newGoal, target: e.target.value})} />
                      </div>
                   </div>
-                  <button type="submit" className="w-full bg-violet-600 text-white py-4 rounded-2xl font-bold">Start Saving</button>
+                  <button type="submit" className="w-full bg-violet-600 text-white py-4 rounded-2xl font-bold cursor-pointer">Start Saving</button>
                </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Edit Budget Modal */}
+      <AnimatePresence>
+        {editingBudget && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-6 text-gray-900">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setEditingBudget(null)} className="absolute inset-0 bg-black/20 backdrop-blur-sm" />
+            <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} className="relative bg-white w-full max-w-sm rounded-[44px] shadow-2xl p-8 space-y-6">
+               <div className="flex justify-between items-center">
+                  <div>
+                    <h2 className="text-2xl font-black tracking-tight">Edit Budget</h2>
+                    <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">{editingBudget.category}</p>
+                  </div>
+                  <button onClick={() => setEditingBudget(null)} className="p-2 text-gray-400 hover:text-gray-600"><X size={20} /></button>
+               </div>
+               <form onSubmit={handleEditBudget} className="space-y-6">
+                  <div className="space-y-1">
+                     <label className="text-[10px] font-black uppercase tracking-widest text-[#94a3b8]">Monthly Limit</label>
+                     <input 
+                        type="number" required placeholder="0.00" 
+                        className="w-full bg-gray-50 border-none rounded-2xl p-4 text-sm font-bold focus:ring-2 focus:ring-violet-500 transition-all outline-none" 
+                        value={editingBudget.limit} 
+                        onChange={e => setEditingBudget({...editingBudget, limit: Number(e.target.value)})} 
+                     />
+                  </div>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => setEditingBudget(null)} className="flex-1 py-4 rounded-2xl font-bold bg-gray-100 text-gray-600 cursor-pointer">Cancel</button>
+                    <button type="submit" className="flex-1 bg-violet-600 text-white py-4 rounded-2xl font-bold cursor-pointer">Save Changes</button>
+                  </div>
+               </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Edit Goal Modal */}
+      <AnimatePresence>
+        {isEditGoalModalOpen && editingGoal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-6 text-gray-900">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => { setIsEditGoalModalOpen(false); setEditingGoal(null); }} className="absolute inset-0 bg-black/20 backdrop-blur-sm" />
+            <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} className="relative bg-white w-full max-w-sm rounded-[44px] shadow-2xl p-8 space-y-6">
+               <div className="flex justify-between items-center">
+                 <h2 className="text-2xl font-black tracking-tight">Edit Goal</h2>
+                 <button onClick={() => { setIsEditGoalModalOpen(false); setEditingGoal(null); }} className="p-2 text-gray-400 hover:text-gray-600"><X size={20} /></button>
+               </div>
+               <form onSubmit={handleEditGoal} className="space-y-6">
+                  <div className="space-y-4">
+                     <div className="space-y-1">
+                        <label className="text-[10px] font-black uppercase tracking-widest text-gray-400">Goal Name</label>
+                        <input type="text" required className="w-full bg-gray-50 border-none rounded-2xl p-4 text-sm font-bold focus:ring-2 focus:ring-violet-50 outline-none transition-all" value={editingGoal.name} onChange={e => setEditingGoal({...editingGoal, name: e.target.value})} />
+                     </div>
+                     <div className="space-y-1">
+                        <label className="text-[10px] font-black uppercase tracking-widest text-gray-400">Target Amount</label>
+                        <input type="number" required className="w-full bg-gray-50 border-none rounded-2xl p-4 text-sm font-bold focus:ring-2 focus:ring-violet-50 outline-none transition-all" value={editingGoal.target} onChange={e => setEditingGoal({...editingGoal, target: Number(e.target.value)})} />
+                     </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => { setIsEditGoalModalOpen(false); setEditingGoal(null); }} className="flex-1 py-4 rounded-2xl font-bold bg-gray-100 text-gray-600 cursor-pointer">Cancel</button>
+                    <button type="submit" className="flex-1 bg-violet-600 text-white py-4 rounded-2xl font-bold cursor-pointer">Save Changes</button>
+                  </div>
+               </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Delete Budget Confirmation Modal */}
+      <AnimatePresence>
+        {isDeletingBudget && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-6 text-gray-900">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsDeletingBudget(null)} className="absolute inset-0 bg-black/20 backdrop-blur-sm" />
+            <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} className="relative bg-white w-full max-w-sm rounded-[32px] shadow-2xl p-6 text-center space-y-4">
+              <div className="w-12 h-12 mx-auto rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center">
+                <Trash2 size={24} />
+              </div>
+              <h3 className="text-lg font-bold text-gray-900">Delete Budget?</h3>
+              <p className="text-xs text-gray-500">Are you sure you want to delete this budget strategy? This action cannot be undone.</p>
+              <div className="flex gap-2 pt-2">
+                <button type="button" onClick={() => setIsDeletingBudget(null)} className="flex-1 py-3 rounded-xl font-bold text-xs bg-gray-100 text-gray-700 cursor-pointer">Cancel</button>
+                <button type="button" onClick={() => removeBudget(isDeletingBudget)} className="flex-1 py-3 rounded-xl font-bold text-xs bg-rose-600 text-white cursor-pointer hover:bg-rose-700">Delete</button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Delete Goal Confirmation Modal */}
+      <AnimatePresence>
+        {isDeletingGoal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-6 text-gray-900">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsDeletingGoal(null)} className="absolute inset-0 bg-black/20 backdrop-blur-sm" />
+            <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} className="relative bg-white w-full max-w-sm rounded-[32px] shadow-2xl p-6 text-center space-y-4">
+              <div className="w-12 h-12 mx-auto rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center">
+                <Trash2 size={24} />
+              </div>
+              <h3 className="text-lg font-bold text-gray-900">Delete Savings Goal?</h3>
+              <p className="text-xs text-gray-500">Are you sure you want to delete this goal and its saved progress?</p>
+              <div className="flex gap-2 pt-2">
+                <button type="button" onClick={() => setIsDeletingGoal(null)} className="flex-1 py-3 rounded-xl font-bold text-xs bg-gray-100 text-gray-700 cursor-pointer">Cancel</button>
+                <button type="button" onClick={() => removeGoal(isDeletingGoal)} className="flex-1 py-3 rounded-xl font-bold text-xs bg-rose-600 text-white cursor-pointer hover:bg-rose-700">Delete</button>
+              </div>
             </motion.div>
           </div>
         )}
@@ -468,17 +705,43 @@ export default function Planning() {
            <div className="fixed inset-0 z-[60] flex items-center justify-center p-6 text-gray-900">
              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsAddFundsOpen(false)} className="absolute inset-0 bg-black/20 backdrop-blur-sm" />
              <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} className="relative bg-white w-full max-w-sm rounded-[44px] shadow-2xl p-8 space-y-6">
-                <div className="text-center space-y-2">
+                <div className="text-center space-y-1">
+                   <div className="w-12 h-12 bg-violet-50 text-violet-600 rounded-2xl flex items-center justify-center mx-auto mb-2">
+                      <Target size={24} />
+                   </div>
                    <h2 className="text-2xl font-black tracking-tight">{selectedGoal.name}</h2>
-                   <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">Adding Funds</p>
+                   <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Contribute To Savings Goal</p>
                 </div>
-                <form onSubmit={handleAddFunds} className="space-y-6">
-                   <input 
-                      type="number" required placeholder="Enter amount..." autoFocus
-                      className="w-full bg-gray-50 border-none rounded-2xl p-6 text-center text-3xl font-black text-gray-900 focus:ring-2 focus:ring-violet-50 outline-none transition-all placeholder:text-gray-200"
-                      value={addFundsAmount} onChange={e => setAddFundsAmount(e.target.value)}
-                   />
-                   <button type="submit" className="w-full bg-violet-600 text-white py-4 rounded-2xl font-bold">Confirm Deposit</button>
+                <form onSubmit={handleAddFunds} className="space-y-5">
+                   <div className="space-y-1">
+                      <label className="text-[10px] font-bold uppercase tracking-widest text-gray-400 block text-left">
+                        Save Amount ({currency.symbol})
+                      </label>
+                      <input 
+                         type="number" required placeholder="0.00" autoFocus
+                         className="w-full bg-gray-50 border-2 border-transparent rounded-2xl p-5 text-center text-3xl font-black text-gray-900 focus:border-violet-200 focus:bg-white outline-none transition-all placeholder:text-gray-300"
+                         value={addFundsAmount} onChange={e => setAddFundsAmount(e.target.value)}
+                      />
+                   </div>
+
+                   <label className="flex items-start gap-3 p-3.5 bg-violet-50/60 rounded-2xl border border-violet-100 cursor-pointer text-left">
+                      <input 
+                         type="checkbox" 
+                         checked={deductFromBalance} 
+                         onChange={e => setDeductFromBalance(e.target.checked)}
+                         className="mt-1 w-4 h-4 rounded text-violet-600 focus:ring-violet-500 cursor-pointer"
+                      />
+                      <div className="space-y-0.5">
+                         <span className="font-bold text-xs text-gray-900 block">Deduct from wallet balance</span>
+                         <span className="text-[11px] text-gray-500 block leading-tight">
+                            Records as a Savings Outflow (Expense). It reduces available spending money and will <strong>never</strong> count as Income.
+                         </span>
+                      </div>
+                   </label>
+
+                   <button type="submit" className="w-full bg-violet-600 text-white py-4 rounded-2xl font-black text-xs uppercase tracking-wider shadow-lg shadow-violet-100 hover:bg-violet-700 transition cursor-pointer">
+                      Save Toward Goal
+                   </button>
                 </form>
              </motion.div>
            </div>

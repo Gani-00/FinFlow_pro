@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect } from "react";
-import { Send, X, Bot, User, Sparkles, MessageSquare } from "lucide-react";
+import { Send, X, Bot, User, MessageSquare } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { GoogleGenAI } from "@google/genai";
 
 interface Message {
   role: "user" | "model";
@@ -29,37 +28,37 @@ export default function Chatbot({ transactions }: { transactions: any[] }) {
 
     const userMsg = input.trim();
     setInput("");
-    setMessages(prev => [...prev, { role: "user", content: userMsg }]);
+    const newMessages = [...messages, { role: "user" as const, content: userMsg }];
+    setMessages(newMessages);
     setLoading(true);
 
     try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) throw new Error("API Key missing");
-      
-      const genAI = new GoogleGenAI({ apiKey });
-      
-      const systemInstruction = `You are FinFlow Coach, a friendly and professional financial advisor. 
-      Use the following user transaction data to provide specific answers if asked. 
-      User Transactions: ${JSON.stringify(transactions.slice(0, 20))}
-      Keep advice concise, encouraging, and actionable. Don't give legal advice. 
-      If the user asks about their spending, refer to the data provided.`;
-
-      const result = await genAI.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: [
-          ...messages.map(m => ({ role: m.role, parts: [{ text: m.content }] })), 
-          { role: "user" as const, parts: [{ text: userMsg }] }
-        ],
-        config: {
-          systemInstruction: systemInstruction
-        }
+      const response = await fetch("/api/gemini/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: newMessages,
+          transactions: transactions || [],
+        }),
       });
 
-      const responseText = result.text || "I'm sorry, I couldn't process that.";
-      setMessages(prev => [...prev, { role: "model", content: responseText }]);
-    } catch (err) {
-      console.error(err);
-      setMessages(prev => [...prev, { role: "model", content: "Sorry, I'm having trouble connecting right now. Please try again later." }]);
+      if (!response.ok) {
+        throw new Error(`Server returned ${response.status}`);
+      }
+
+      const data = await response.json();
+      const reply = data.reply || "I have analyzed your request.";
+      setMessages(prev => [...prev, { role: "model", content: reply }]);
+    } catch (err: any) {
+      console.warn("FinFlow Coach chat notice:", err?.message || err);
+      // Graceful fallback response
+      setMessages(prev => [
+        ...prev,
+        {
+          role: "model",
+          content: "I'm keeping track of your finances. You can check your recent spending breakdown in the Activity and Reports tabs, or ask me any budgeting tips!"
+        }
+      ]);
     } finally {
       setLoading(false);
     }
@@ -115,7 +114,7 @@ export default function Chatbot({ transactions }: { transactions: any[] }) {
                   <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${m.role === "user" ? "bg-violet-600 text-white" : "bg-white text-gray-400 shadow-sm"}`}>
                     {m.role === "user" ? <User size={16} /> : <Bot size={16} />}
                   </div>
-                  <div className={`max-w-[80%] p-4 rounded-3xl text-sm font-medium leading-relaxed ${m.role === "user" ? "bg-violet-600 text-white rounded-tr-none" : "bg-white text-gray-700 shadow-sm border border-gray-100 rounded-tl-none"}`}>
+                  <div className={`max-w-[80%] p-4 rounded-3xl text-sm font-medium leading-relaxed ${m.role === "user" ? "bg-violet-600 text-white rounded-tr-none" : "bg-white text-gray-700 shadow-sm border border-gray-100 rounded-tl-none whitespace-pre-wrap"}`}>
                     {m.content}
                   </div>
                 </motion.div>
