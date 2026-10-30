@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect } from "react";
 import { Send, Bot, User, Sparkles, ChevronLeft, Trash2 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { GoogleGenAI } from "@google/genai";
 import { db, auth } from "../lib/firebase";
-import { collection, query, where, getDocs, orderBy } from "firebase/firestore";
+import { collection, query, where, getDocs } from "firebase/firestore";
+import { onAuthStateChanged } from "firebase/auth";
+import { parseFirestoreDate } from "../utils/dateUtils";
 import { useNavigate } from "react-router-dom";
 
 interface Message {
@@ -32,17 +33,29 @@ export default function AIAdvisor() {
   }, [messages]);
 
   useEffect(() => {
-    const fetchTransactions = async () => {
-      if (!auth.currentUser) return;
-      const q = query(
-        collection(db, "transactions"),
-        where("userId", "==", auth.currentUser.uid),
-        orderBy("date", "desc")
-      );
-      const snapshot = await getDocs(q);
-      setTransactions(snapshot.docs.map(doc => doc.data()));
-    };
-    fetchTransactions();
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      if (!user) return;
+      try {
+        const q = query(
+          collection(db, "transactions"),
+          where("userId", "==", user.uid)
+        );
+        const snapshot = await getDocs(q);
+        const list = snapshot.docs.map(doc => {
+          const data = doc.data();
+          return {
+            ...data,
+            id: doc.id,
+            date: parseFirestoreDate(data.date)
+          };
+        });
+        list.sort((a, b) => b.date.getTime() - a.date.getTime());
+        setTransactions(list);
+      } catch (err) {
+        console.warn("Failed fetching transactions for advisor:", err);
+      }
+    });
+    return () => unsub();
   }, []);
 
   const handleSend = async (e: React.FormEvent) => {
@@ -56,34 +69,37 @@ export default function AIAdvisor() {
     setLoading(true);
 
     try {
-      const apiKey = process.env.ENTER_API_KEY;
-      if (!apiKey) throw new Error("API Key missing");
-      
-      const genAI = new GoogleGenAI({ apiKey });
-      
-      const systemInstruction = `You are FinFlow Coach, a world-class financial advisor. 
-      You help users manage expenses, set budgets, and achieve financial freedom.
-      Current User Data (Recent Transactions): ${JSON.stringify(transactions.slice(0, 30))}
-      Respond in a professional yet encouraging tone. Be concise. 
-      If providing insights, use bullet points. 
-      Always prioritize data-driven advice based on the provided transactions.`;
-
-      const result = await genAI.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: [
-          ...messages.map(m => ({ role: m.role, parts: [{ text: m.content }] })), 
-          { role: "user" as const, parts: [{ text: userMsg }] }
-        ],
-        config: {
-          systemInstruction: systemInstruction
-        }
+      const response = await fetch("/api/gemini/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: newMessages,
+          transactions: transactions || [],
+        }),
       });
 
-      const responseText = result.text || "I'm sorry, I couldn't process that.";
-      setMessages(prev => [...prev, { role: "model", content: responseText }]);
-    } catch (err) {
-      console.error(err);
-      setMessages(prev => [...prev, { role: "model", content: "I'm having trouble thinking right now. Please check your network and try again." }]);
+      if (!response.ok) {
+        throw new Error(`Server returned ${response.status}`);
+      }
+
+      const data = await response.json();
+      const reply = data.reply || "I have reviewed your financial query.";
+      setMessages(prev => [...prev, { role: "model", content: reply }]);
+    } catch (err: any) {
+      console.warn("AI Coach server query notice:", err?.message || err);
+      // Fallback response based on data
+      const totalSpent = transactions
+        .filter(t => t.type === "expense")
+        .reduce((acc, t) => acc + Number(t.amount || 0), 0);
+      const totalEarned = transactions
+        .filter(t => t.type === "income")
+        .reduce((acc, t) => acc + Number(t.amount || 0), 0);
+
+      const fallbackReply = transactions.length > 0
+        ? `Here is your current financial summary:\n\n• Recorded Balance: ₹${(totalEarned - totalSpent).toLocaleString()}\n• Activity: ${transactions.length} entries tracked\n• Recommendation: Keep emergency funds liquid while investing surplus cash into diversified funds.`
+        : "I'm ready to help you optimize your money! Add your first transactions in the Activity tab to get personalized recommendations.";
+
+      setMessages(prev => [...prev, { role: "model", content: fallbackReply }]);
     } finally {
       setLoading(false);
     }

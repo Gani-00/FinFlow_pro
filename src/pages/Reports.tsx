@@ -1,35 +1,51 @@
 import { useState, useEffect } from "react";
 import { collection, query, getDocs, where } from "firebase/firestore";
-import { db, auth, handleFirestoreError, OperationType } from "../lib/firebase";
+import { db, auth, handleFirestoreError, OperationType, getReadableFirestoreErrorMessage } from "../lib/firebase";
+import { useToast } from "../context/ToastContext";
 import { motion } from "motion/react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, PieChart, Pie } from "recharts";
 import { TrendingUp, TrendingDown, Clock, Activity as ActivityIcon } from "lucide-react";
+import { parseFirestoreDate } from "../utils/dateUtils";
 
 export default function Reports() {
+  const { error: toastError } = useToast();
   const [transactions, setTransactions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function fetchData() {
-      if (!auth.currentUser) return;
+      if (!auth.currentUser) {
+        setLoading(false);
+        return;
+      }
       try {
         const q = query(collection(db, "transactions"), where("userId", "==", auth.currentUser.uid));
         const snapshot = await getDocs(q);
-        const data = snapshot.docs.map(doc => ({
-          ...doc.data(),
-          date: doc.data().date?.toDate() || new Date()
-        }));
+        const data = snapshot.docs.map(doc => {
+          const raw = doc.data();
+          const amount = Math.abs(Number(raw.amount) || 0);
+          const type = String(raw.type || "expense").trim().toLowerCase() === "income" ? "income" : "expense";
+          return {
+            ...raw,
+            id: doc.id,
+            amount,
+            type,
+            date: parseFirestoreDate(raw.date)
+          };
+        });
         setTransactions(data);
-        setLoading(false);
       } catch (error) {
+        toastError(getReadableFirestoreErrorMessage(error));
         handleFirestoreError(error, OperationType.LIST, "transactions");
+      } finally {
+        setLoading(false);
       }
     }
     fetchData();
-  }, []);
+  }, [toastError]);
 
-  const totalIncome = transactions.filter(t => t.type === "income" && t.amount).reduce((acc, t) => acc + Number(t.amount), 0);
-  const totalExpense = transactions.filter(t => t.type === "expense" && t.amount).reduce((acc, t) => acc + Number(t.amount), 0);
+  const totalIncome = transactions.filter(t => t.type === "income").reduce((acc, t) => acc + t.amount, 0);
+  const totalExpense = transactions.filter(t => t.type === "expense").reduce((acc, t) => acc + t.amount, 0);
   const netBalance = totalIncome - totalExpense;
 
   // Process data for charts

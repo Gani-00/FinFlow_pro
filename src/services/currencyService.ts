@@ -25,6 +25,22 @@ export function useCurrency() {
   return { currency, updateCurrency };
 }
 
-export function formatCurrency(amount: number, currency: { code: string, symbol: string }) {
-  return `${currency.symbol}${amount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+export function formatCurrency(
+  amount: number, 
+  currency: { code: string, symbol: string },
+  decimals?: number
+) {
+  const isNegative = amount < 0;
+  const absAmount = Math.abs(amount);
+  const fractionDigits = decimals !== undefined 
+    ? decimals 
+    : (absAmount % 1 !== 0 ? 2 : 0);
+  const locale = currency.code === "INR" ? "en-IN" : undefined;
+  const formattedNumber = absAmount.toLocaleString(locale, {
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  });
+
+  return `${isNegative ? '-' : ''}${currency.symbol}${formattedNumber}`;
 }
+
