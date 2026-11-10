@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -7,6 +8,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-d
 import { useState, useEffect } from "react";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth } from "./lib/firebase";
+
 import Dashboard from "./pages/Dashboard";
 import Activity from "./pages/Transactions";
 import Reports from "./pages/Reports";
@@ -18,9 +20,12 @@ import About from "./pages/About";
 import AIAdvisor from "./pages/AIAdvisor";
 import Planning from "./pages/Planning";
 import NotFound from "./pages/NotFound";
+
 import Layout from "./components/Layout";
 import ErrorBoundary from "./components/ErrorBoundary";
+
 import { ToastProvider } from "./context/ToastContext";
+import { ThemeProvider } from "./context/ThemeContext";
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
@@ -29,15 +34,20 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setIsAuthenticated(!!user);
     });
+
     return () => unsubscribe();
   }, []);
 
-  if (isAuthenticated === null) return (
-    <div className="h-screen w-screen flex flex-col items-center justify-center font-sans bg-[#f1f5f9]">
+  if (isAuthenticated === null) {
+    return (
+      <div className="h-screen w-screen flex flex-col items-center justify-center font-sans bg-[#f1f5f9]">
         <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mb-4"></div>
-        <div className="text-[10px] font-bold uppercase tracking-widest text-[#94a3b8]">Initializing FinFlow...</div>
-    </div>
-  );
+        <div className="text-[10px] font-bold uppercase tracking-widest text-[#94a3b8]">
+          Initializing FinFlow...
+        </div>
+      </div>
+    );
+  }
 
   const handleLogout = async () => {
     try {
@@ -50,32 +60,62 @@ export default function App() {
   return (
     <ErrorBoundary>
       <ToastProvider>
-        <Router>
-          <Routes>
-            <Route path="/auth" element={!isAuthenticated ? <AuthPage onAuthSuccess={() => setIsAuthenticated(true)} /> : <Navigate to="/" />} />
-            
-            {/* Authenticated Application Shell */}
-            <Route element={isAuthenticated ? <Layout onLogout={handleLogout} /> : <Navigate to="/auth" />}>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/activity" element={<Activity />} />
-              <Route path="/planning" element={<Planning />} />
-              <Route path="/reports" element={<Reports />} />
-              <Route path="/settings" element={<Settings />} />
-              <Route path="/recurring" element={<Recurring />} />
-              <Route path="/shared" element={<SharedDashboard />} />
-              <Route path="/about" element={<About />} />
-              <Route path="/ai-advisor" element={<AIAdvisor />} />
+        <ThemeProvider>
+          <Router>
+            <Routes>
+              <Route
+                path="/auth"
+                element={
+                  !isAuthenticated ? (
+                    <AuthPage
+                      onAuthSuccess={() => setIsAuthenticated(true)}
+                    />
+                  ) : (
+                    <Navigate to="/" />
+                  )
+                }
+              />
 
-              {/* Convenience / Legacy redirects */}
-              <Route path="/budgets" element={<Navigate to="/planning" replace />} />
-              <Route path="/goals" element={<Navigate to="/planning" replace />} />
-              <Route path="/transactions" element={<Navigate to="/activity" replace />} />
-            </Route>
+              {/* Authenticated Application Shell */}
+              <Route
+                element={
+                  isAuthenticated ? (
+                    <Layout onLogout={handleLogout} />
+                  ) : (
+                    <Navigate to="/auth" />
+                  )
+                }
+              >
+                <Route path="/" element={<Dashboard />} />
+                <Route path="/activity" element={<Activity />} />
+                <Route path="/planning" element={<Planning />} />
+                <Route path="/reports" element={<Reports />} />
+                <Route path="/settings" element={<Settings />} />
+                <Route path="/recurring" element={<Recurring />} />
+                <Route path="/shared" element={<SharedDashboard />} />
+                <Route path="/about" element={<About />} />
+                <Route path="/ai-advisor" element={<AIAdvisor />} />
 
-            {/* 404 Catch-All */}
-            <Route path="*" element={<NotFound />} />
-          </Routes>
-        </Router>
+                {/* Convenience / Legacy redirects */}
+                <Route
+                  path="/budgets"
+                  element={<Navigate to="/planning" replace />}
+                />
+                <Route
+                  path="/goals"
+                  element={<Navigate to="/planning" replace />}
+                />
+                <Route
+                  path="/transactions"
+                  element={<Navigate to="/activity" replace />}
+                />
+              </Route>
+
+              {/* 404 Catch-All */}
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+          </Router>
+        </ThemeProvider>
       </ToastProvider>
     </ErrorBoundary>
   );
